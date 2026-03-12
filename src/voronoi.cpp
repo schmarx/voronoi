@@ -1,4 +1,5 @@
 #include <math.h>
+#include <queue>
 #include <stdio.h>
 #include <stdlib.h>
 #include <vector>
@@ -66,53 +67,48 @@ class Coast {
 
 class Event {
   public:
+	int id;
 	int type;
 	Point point;
 	float timestamp; // when this event will happen ( largest earliest )
 	int event_target_id;
 
-	Event(int event_type, Point event_point, float sweepline) {
+	Event(int event_type, Point event_point, float sweepline, int event_id) {
 		type = event_type;
 		point = event_point;
 		timestamp = sweepline;
+		id = event_id;
+	}
+
+	// the event with largest timestamp occurs first
+	bool operator<(const Event &event) const {
+		if (timestamp == event.timestamp) return id > event.id; // if the events have the same time, the first added event has priority
+		return timestamp < event.timestamp;
 	}
 };
 
 class Voronoi {
   private:
-	std::vector<Event> events;
+	std::priority_queue<Event> events;
 	std::vector<Coast> coastline;
 
 	float current_sweep;
 	int event_count = 0;
 	int id = 0;
+	int event_id = 0;
 
 	Point bounds_min;
 	Point bounds_max;
 
-	Event pop_next_event() {
-		size_t soonest = 0;
-		for (size_t i = 1; i < events.size(); i++) {
-			if (events[i].timestamp > current_sweep) continue; // TODO: this should not happen
-			if (events[i].timestamp > events[soonest].timestamp) soonest = i;
-		}
-
-		Event soonest_event = events[soonest];
-		delete_at(events, soonest);
-		return soonest_event;
-	}
-
 	// evaluates the height at position x of a parabola with given focus and directrix
-	float parabola_y(float x, Point focus, float directrix) {
-		return pow(x - focus.x, 2) / (2 * (focus.y - directrix)) + (focus.y + directrix) / 2;
-	}
+	float parabola_y(float x, Point focus, float directrix) { return pow(x - focus.x, 2) / (2 * (focus.y - directrix)) + (focus.y + directrix) / 2; }
 
 	// get the coast arc above the given point
 	int get_coast_above(Point point) {
 		// TODO: deal with sites that have the same y component
-
 		int min_index = -1;
 		for (size_t i = 0; i < coastline.size(); i++) {
+			if (coastline[i].type == COAST_EDGE) continue;
 			if (coastline[i].range_start < point.x && coastline[i].range_end > point.x) {
 				if (min_index == -1) min_index = i;
 				else if (parabola_y(point.x, coastline[i].focus, point.y) < parabola_y(point.x, coastline[min_index].focus, point.y)) min_index = i;
@@ -135,8 +131,8 @@ class Voronoi {
 		float val = next.direction.x * prev.direction.y - next.direction.y * prev.direction.x;
 
 		if (val == 0) {
-			// TODO: this should not happen
-			printf("same\n");
+			printf("exit 0\n");
+			return; // TODO: this should not happen
 		}
 		float t = (dist.y * next.direction.x - dist.x * next.direction.y) / val;
 		float c = (dist.y * prev.direction.x - dist.x * prev.direction.y) / val;
@@ -144,20 +140,21 @@ class Voronoi {
 		// next_end = next.focus + t * next.direction
 		Point intersection = Point(prev.focus.x + t * prev.direction.x, prev.focus.y + t * prev.direction.y);
 		if (t < 0 || c < 0) {
-			// if the rays move in reverse
+			// if the rays have to move in reverse to intersect
 			return;
 		}
 
 		float sweepline = intersection.y - sqrt(pow(intersection.x - arc.focus.x, 2) + pow(intersection.y - arc.focus.y, 2));
 
 		if (sweepline > current_sweep) {
+			printf("exit old\n"); // TODO: this should not happen
 			return;
 		}
 
-		Event new_event = Event(EVENT_INTERSECT, intersection, sweepline);
+		Event new_event = Event(EVENT_INTERSECT, intersection, sweepline, event_id++);
 		new_event.event_target_id = arc.id;
 
-		events.push_back(new_event);
+		events.push(new_event);
 	}
 
 	void do_site(Event event) {
@@ -172,11 +169,11 @@ class Voronoi {
 		int coast_above = get_coast_above(event.point); // find the coast that is directly above this point
 		if (coast_above == -1) {
 			// this should only happen when the coast is empty (when this is the first event)
-			coastline.push_back(new_arc);
+			coastline.push_back(Coast(new_arc));
 		} else {
 			// the arc above will be split in two, where the feasible ranges will extend from the newly inserted point
-			Coast left_split = coastline[coast_above];
-			Coast right_split = coastline[coast_above];
+			Coast left_split = Coast(coastline[coast_above]);
+			Coast right_split = Coast(coastline[coast_above]);
 			left_split.range_end = event.point.x;
 			right_split.range_start = event.point.x;
 			left_split.id = id++;
@@ -205,6 +202,7 @@ class Voronoi {
 			insert_at(coastline, coast_above + 3, right);
 			insert_at(coastline, coast_above + 4, right_split);
 
+			// printf("added %.1f, %.1f and %.1f, %.1f (%.1f, %.1f), (%.1f, %.1f)\n", left.direction.x, left.direction.y, right.direction.x, right.direction.y, new_arc.focus.x, new_arc.focus.y, coastline[coast_above].focus.x, coastline[coast_above].focus.y);
 			get_intersection_event(coast_above);	 // the left side
 			get_intersection_event(coast_above + 4); // the right side
 		}
@@ -218,32 +216,31 @@ class Voronoi {
 				break;
 			}
 		}
-		if (index == -1) {
-			printf("\n\ncould not find target\n\n\n");
+		if (index < 2 || index >= (int)coastline.size() - 2) {
+			// printf("\n\ncould not find target\n\n\n");
 			return;
 		}
 
-		Coast collapsed_arc = coastline[index];
-		Coast edge_left = coastline[index - 1];
-		Coast edge_right = coastline[index + 1];
+		Coast edge_left = Coast(coastline[index - 1]);
+		Coast edge_right = Coast(coastline[index + 1]);
 
 		delete_at(coastline, index + 1); // delete left edge
 		delete_at(coastline, index);	 // delete collapsed arc
 		delete_at(coastline, index - 1); // delete right edge
 
-		Coast new_edge;
-		new_edge.type = COAST_EDGE;
-		new_edge.id = id++;
-
 		// these arcs now need an edge between them
 		Coast arc_left = coastline[index - 2];
 		Coast arc_right = coastline[index - 1];
+
+		Coast new_edge;
+		new_edge.type = COAST_EDGE;
+		new_edge.id = id++;
 
 		Point dr = arc_right.focus - arc_left.focus;
 		new_edge.direction = Point(dr.y, -dr.x);
 		new_edge.focus = event.point;
 
-		insert_at(coastline, index - 1, new_edge);
+		insert_at(coastline, index - 1, Coast(new_edge));
 
 		// these edges are apart of the voronoi diagram
 		edges.push_back(Edge(event.point, edge_left.focus));
@@ -256,6 +253,9 @@ class Voronoi {
   public:
 	std::vector<Point> points;
 	std::vector<Edge> edges;
+
+	int proceessed_events = 0;
+	int site_events = 0;
 
 	Voronoi(float **pts, int point_count, float x_min, float x_max, float y_min, float y_max) {
 		for (int i = 0; i < point_count; i++) {
@@ -270,23 +270,36 @@ class Voronoi {
 	}
 
 	void next_step() {
-		if (events.size() > 0) {
-			Event next_event = pop_next_event();
+		if (!events.empty()) {
+
+			Event next_event = events.top(); // get next event from the priority queue
+			events.pop();					 // remove this event
 
 			current_sweep = next_event.timestamp;
 
-			if (next_event.type == EVENT_SITE) do_site(next_event);
-			else do_intersect(next_event);
+			if (next_event.type == EVENT_SITE) {
+				do_site(next_event);
+				site_events++;
+			} else {
+				do_intersect(next_event);
+			}
+
+			proceessed_events++;
 		}
 	}
 
 	void solve_full() {
+		printf("setup\n");
 		solve();
+		printf("solving with %li points\n", events.size());
 
-		while (events.size() > 0) {
+		while (!events.empty()) {
 			next_step();
 		}
 
+		printf("processed %i events (%i site)\n", proceessed_events, site_events);
+
+		printf("clipping\n");
 		for (size_t i = 0; i < coastline.size(); i++) {
 			if (coastline[i].type == COAST_EDGE) {
 				float start_x = coastline[i].focus.x;
@@ -376,7 +389,7 @@ class Voronoi {
 		float y_max = points[0].y;
 		// add all the sites as events that will take place
 		for (size_t i = 0; i < points.size(); i++) {
-			events.push_back(Event(EVENT_SITE, points[i], points[i].y));
+			events.push(Event(EVENT_SITE, points[i], points[i].y, event_id++));
 
 			if (points[i].y > y_max) y_max = points[i].y;
 			else if (points[i].y < y_min) y_min = points[i].y;
@@ -391,7 +404,7 @@ class Voronoi {
 		current_sweep = y_above;
 
 		// TODO: this is temporary
-		events.push_back(Event(EVENT_SITE, Point(x_midpoint, current_sweep), current_sweep)); // this is to avoid the issues with the first generated sites
+		events.push(Event(EVENT_SITE, Point(x_midpoint, current_sweep), current_sweep, event_id++)); // this is to avoid the issues with the first generated sites
 	}
 };
 

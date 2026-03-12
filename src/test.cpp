@@ -1,3 +1,5 @@
+#include <chrono>
+
 #include "voronoi.cpp"
 
 #define rng(max) rand() % ((max) + 1)
@@ -22,7 +24,9 @@ void output_edges(const std::vector<voronoi::Point> &points, const std::vector<v
 }
 
 int main(int argc, char *argv[]) {
-	int point_count = 20;
+	srand(0);
+
+	int point_count = 20000;
 
 	float x_min = 0;
 	float x_max = 100;
@@ -37,8 +41,13 @@ int main(int argc, char *argv[]) {
 		points[i][1] = rngfr(y_min, y_max);
 	}
 
+	auto start = std::chrono::high_resolution_clock().now();
 	voronoi::Voronoi voronoi = voronoi::Voronoi(points, point_count, x_min, x_max, y_min, y_max);
 	voronoi.solve_full();
+
+	auto end = std::chrono::high_resolution_clock().now();
+
+	printf("time: %lims\n", std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count());
 
 	output_edges(voronoi.points, voronoi.edges, "./output/edges.txt");
 
