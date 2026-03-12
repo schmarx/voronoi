@@ -3,11 +3,10 @@
 #include <stdlib.h>
 #include <vector>
 
-#define rng(max) rand() % ((max) + 1)
-#define rngr(min, max) (rng(((max) - (min))) + (min))
-
 #define insert_at(vector, index, value) vector.insert(vector.begin() + (index), value);
 #define delete_at(vector, index) vector.erase(vector.begin() + (index));
+
+namespace voronoi {
 
 enum EVENT_TYPES {
 	EVENT_SITE,
@@ -63,9 +62,6 @@ class Coast {
 
 	int type;
 	Point direction;
-
-	// Edge *left;
-	// Edge *right;
 };
 
 class Event {
@@ -83,30 +79,21 @@ class Event {
 };
 
 class Voronoi {
-  public:
+  private:
 	std::vector<Event> events;
-	std::vector<Point> points;
 	std::vector<Coast> coastline;
 
-	std::vector<Edge> edges;
-
-	float current_sweep; // TODO: this causes issues with the condition in pop_next_event
+	float current_sweep;
 	int event_count = 0;
 	int id = 0;
 
-	Voronoi(float **pts, int point_count) {
-		for (int i = 0; i < point_count; i++) {
-			points.push_back(Point(pts[i][0], pts[i][1]));
-		}
-	}
-
-	Voronoi() {
-	}
+	Point bounds_min;
+	Point bounds_max;
 
 	Event pop_next_event() {
 		size_t soonest = 0;
 		for (size_t i = 1; i < events.size(); i++) {
-			if (events[i].timestamp > current_sweep) continue; // TODO: this probably will not happen
+			if (events[i].timestamp > current_sweep) continue; // TODO: this should not happen
 			if (events[i].timestamp > events[soonest].timestamp) soonest = i;
 		}
 
@@ -147,8 +134,8 @@ class Voronoi {
 		Point dist = next.focus - prev.focus;
 		float val = next.direction.x * prev.direction.y - next.direction.y * prev.direction.x;
 
-		printf("intersection %.1f, %.1f [%.1f, %.1f] -> %.1f, %.1f [%.1f, %.1f]\n", prev.focus.x, prev.focus.y, prev.direction.x, prev.direction.y, next.focus.x, next.focus.y, next.direction.x, next.direction.y);
 		if (val == 0) {
+			// TODO: this should not happen
 			printf("same\n");
 		}
 		float t = (dist.y * next.direction.x - dist.x * next.direction.y) / val;
@@ -156,20 +143,16 @@ class Voronoi {
 
 		// next_end = next.focus + t * next.direction
 		Point intersection = Point(prev.focus.x + t * prev.direction.x, prev.focus.y + t * prev.direction.y);
-		printf("> %.1f, %.1f\n", intersection.x, intersection.y);
 		if (t < 0 || c < 0) {
 			// if the rays move in reverse
-			printf("exit\n");
 			return;
 		}
 
 		float sweepline = intersection.y - sqrt(pow(intersection.x - arc.focus.x, 2) + pow(intersection.y - arc.focus.y, 2));
 
-		printf("incl (%f, %f) ev at %.1f (%.1f)\n", arc.focus.x, arc.focus.y, sweepline, current_sweep);
-		// if (sweepline > current_sweep) {
-		// 	printf("excl (%.1f > %.1f)\n", sweepline, current_sweep);
-		// 	return;
-		// }
+		if (sweepline > current_sweep) {
+			return;
+		}
 
 		Event new_event = Event(EVENT_INTERSECT, intersection, sweepline);
 		new_event.event_target_id = arc.id;
@@ -260,8 +243,6 @@ class Voronoi {
 		new_edge.direction = Point(dr.y, -dr.x);
 		new_edge.focus = event.point;
 
-		printf("%.1f, %.1f removed\n", collapsed_arc.focus.x, collapsed_arc.focus.y);
-		printf("%.1f, %.1f -> %.1f, %.1f added\n", new_edge.focus.x, new_edge.focus.y, new_edge.direction.x, new_edge.direction.y);
 		insert_at(coastline, index - 1, new_edge);
 
 		// these edges are apart of the voronoi diagram
@@ -272,14 +253,20 @@ class Voronoi {
 		get_intersection_event(index - 2); // the previous arc
 	}
 
-	void output_edges(const char *filename) {
-		FILE *file = fopen(filename, "w");
+  public:
+	std::vector<Point> points;
+	std::vector<Edge> edges;
 
-		for (size_t i = 0; i < edges.size(); i++) {
-			fprintf(file, "(%.1f, %.1f), (%.1f, %.1f)\n", edges[i].start.x, edges[i].start.y, edges[i].end.x, edges[i].end.y);
+	Voronoi(float **pts, int point_count, float x_min, float x_max, float y_min, float y_max) {
+		for (int i = 0; i < point_count; i++) {
+			points.push_back(Point(pts[i][0], pts[i][1]));
 		}
 
-		fclose(file);
+		bounds_min = Point(x_min, y_min);
+		bounds_max = Point(x_max, y_max);
+	}
+
+	Voronoi() {
 	}
 
 	void next_step() {
@@ -287,16 +274,9 @@ class Voronoi {
 			Event next_event = pop_next_event();
 
 			current_sweep = next_event.timestamp;
-			printf("[%i] @ %f %s event at %.1f, %.1f\n", event_count++, current_sweep, next_event.type == EVENT_SITE ? "site" : "intersection", next_event.point.x, next_event.point.y);
 
 			if (next_event.type == EVENT_SITE) do_site(next_event);
 			else do_intersect(next_event);
-
-			for (size_t i = 0; i < coastline.size(); i++) {
-				if (i != 0) printf(" -> ");
-				printf("(%.1f, %.1f) [%s]", coastline[i].focus.x, coastline[i].focus.y, coastline[i].type == COAST_ARC ? "arc" : "edge");
-			}
-			printf("\n\n");
 		}
 	}
 
@@ -307,7 +287,82 @@ class Voronoi {
 			next_step();
 		}
 
-		output_edges("./output/edges.txt");
+		for (size_t i = 0; i < coastline.size(); i++) {
+			if (coastline[i].type == COAST_EDGE) {
+				float start_x = coastline[i].focus.x;
+				float start_y = coastline[i].focus.y;
+				float direction_x = coastline[i].direction.x;
+				float direction_y = coastline[i].direction.y;
+
+				float x1 = (bounds_min.x - start_x) / direction_x;
+				float x2 = (bounds_max.x - start_x) / direction_x;
+
+				float y1 = (bounds_min.y - start_y) / direction_y;
+				float y2 = (bounds_max.y - start_y) / direction_y;
+
+				if ((x1 < 0 && x2 < 0) || (y1 < 0 && y2 < 0)) continue;
+
+				float x_used = x1;
+				float y_used = y1;
+				int use_min_x = 1;
+				int use_min_y = 1;
+				if (x1 < 0) {
+					x_used = x2;
+					use_min_x = 0;
+				}
+				if (y1 < 0) {
+					y_used = y2;
+					use_min_y = 0;
+				}
+
+				if (x_used < y_used) {
+					if (use_min_x) {
+						edges.push_back(Edge(coastline[i].focus, Point(bounds_min.x, start_y + direction_y * x_used)));
+					} else {
+						edges.push_back(Edge(coastline[i].focus, Point(bounds_max.x, start_y + direction_y * x_used)));
+					}
+				} else {
+					if (use_min_y) {
+						edges.push_back(Edge(coastline[i].focus, Point(start_x + direction_x * y_used, bounds_min.y)));
+					} else {
+						edges.push_back(Edge(coastline[i].focus, Point(start_x + direction_x * y_used, bounds_max.y)));
+					}
+				}
+			}
+		}
+
+		for (size_t i = 0; i < edges.size(); i++) {
+			Point direction = edges[i].end - edges[i].start;
+			if (edges[i].start.x < bounds_min.x) {
+				float x1 = (bounds_min.x - edges[i].start.x) / direction.x;
+				edges[i].start.x = bounds_min.x;
+				edges[i].start.y += x1 * direction.y;
+			} else if (edges[i].start.x > bounds_max.x) {
+				float x1 = (bounds_max.x - edges[i].start.x) / direction.x;
+				edges[i].start.x = bounds_max.x;
+				edges[i].start.y += x1 * direction.y;
+			}
+
+			if (edges[i].end.x < bounds_min.x) {
+				float x1 = (bounds_min.x - edges[i].end.x) / direction.x;
+				edges[i].end.x = bounds_min.x;
+				edges[i].end.y += x1 * direction.y;
+			} else if (edges[i].end.x > bounds_max.x) {
+				float x1 = (bounds_max.x - edges[i].end.x) / direction.x;
+				edges[i].end.x = bounds_max.x;
+				edges[i].end.y += x1 * direction.y;
+			}
+
+			// if (edges[i].start.y < bounds_min.y) {
+			// 	float y1 = (bounds_min.y - start.y) / direction.y;
+			// 	edges[i].start.y = bounds_min.x;
+			// 	edges[i].start.x += y1 * direction.x;
+			// } else if (edges[i].start.y > bounds_max.y) {
+			// 	float y1 = (bounds_max.y - start.y) / direction.y;
+			// 	edges[i].start.y = bounds_max.y;
+			// 	edges[i].start.x += y1 * direction.x;
+			// }
+		}
 	}
 
 	void solve() {
@@ -340,24 +395,4 @@ class Voronoi {
 	}
 };
 
-int main(int argc, char *argv[]) {
-	int point_count = 10;
-
-	float **points = (float **)calloc(point_count, sizeof(float *));
-	for (int i = 0; i < point_count; i++) {
-		points[i] = (float *)calloc(2, sizeof(float));
-
-		points[i][0] = rngr(0, 100);
-		points[i][1] = rngr(0, 100);
-	}
-
-	Voronoi voronoi = Voronoi(points, point_count);
-	voronoi.solve_full();
-
-	for (int i = 0; i < point_count; i++) {
-		free(points[i]);
-	}
-	free(points);
-
-	return EXIT_SUCCESS;
-}
+}; // namespace voronoi
