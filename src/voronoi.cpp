@@ -65,24 +65,26 @@ class Coast {
 	Point direction;
 };
 
+int event_id = 0;
+
 class Event {
   public:
 	int id;
 	int type;
 	Point point;
-	float timestamp; // when this event will happen ( largest earliest )
+	float timestamp; // the sweepline point at which this event will happen ( largest happens earliest )
 	int event_target_id;
 
-	Event(int event_type, Point event_point, float sweepline, int event_id) {
+	Event(int event_type, Point event_point, float sweepline) {
 		type = event_type;
 		point = event_point;
 		timestamp = sweepline;
-		id = event_id;
+
+		id = event_id++; // give this a unique identifier
 	}
 
 	// the event with largest timestamp occurs first
 	bool operator<(const Event &event) const {
-		if (timestamp == event.timestamp) return id > event.id; // if the events have the same time, the first added event has priority
 		return timestamp < event.timestamp;
 	}
 };
@@ -95,7 +97,6 @@ class Voronoi {
 	float current_sweep;
 	int event_count = 0;
 	int id = 0;
-	int event_id = 0;
 
 	Point bounds_min;
 	Point bounds_max;
@@ -151,7 +152,7 @@ class Voronoi {
 			return;
 		}
 
-		Event new_event = Event(EVENT_INTERSECT, intersection, sweepline, event_id++);
+		Event new_event = Event(EVENT_INTERSECT, intersection, sweepline);
 		new_event.event_target_id = arc.id;
 
 		events.push(new_event);
@@ -210,16 +211,13 @@ class Voronoi {
 
 	void do_intersect(Event event) {
 		int index = -1;
-		for (size_t i = 0; i < coastline.size(); i++) {
+		for (size_t i = 2; i < coastline.size() - 2; i++) {
 			if (coastline[i].id == event.event_target_id) {
 				index = i;
 				break;
 			}
 		}
-		if (index < 2 || index >= (int)coastline.size() - 2) {
-			// printf("\n\ncould not find target\n\n\n");
-			return;
-		}
+		if (index == -1) return;
 
 		Coast edge_left = Coast(coastline[index - 1]);
 		Coast edge_right = Coast(coastline[index + 1]);
@@ -255,7 +253,6 @@ class Voronoi {
 	std::vector<Edge> edges;
 
 	int proceessed_events = 0;
-	int site_events = 0;
 
 	Voronoi(float **pts, int point_count, float x_min, float x_max, float y_min, float y_max) {
 		for (int i = 0; i < point_count; i++) {
@@ -277,29 +274,14 @@ class Voronoi {
 
 			current_sweep = next_event.timestamp;
 
-			if (next_event.type == EVENT_SITE) {
-				do_site(next_event);
-				site_events++;
-			} else {
-				do_intersect(next_event);
-			}
+			if (next_event.type == EVENT_SITE) do_site(next_event);
+			else do_intersect(next_event);
 
 			proceessed_events++;
 		}
 	}
 
-	void solve_full() {
-		printf("setup\n");
-		solve();
-		printf("solving with %li points\n", events.size());
-
-		while (!events.empty()) {
-			next_step();
-		}
-
-		printf("processed %i events (%i site)\n", proceessed_events, site_events);
-
-		printf("clipping\n");
+	void add_remaining_edges() {
 		for (size_t i = 0; i < coastline.size(); i++) {
 			if (coastline[i].type == COAST_EDGE) {
 				float start_x = coastline[i].focus.x;
@@ -343,39 +325,74 @@ class Voronoi {
 				}
 			}
 		}
+	}
 
+	void clip_edges() {
 		for (size_t i = 0; i < edges.size(); i++) {
+
+			Point d_start_min = bounds_min - edges[i].start;
+			Point d_start_max = bounds_max - edges[i].start;
+			Point d_end_min = bounds_min - edges[i].end;
+			Point d_end_max = bounds_max - edges[i].end;
+
+			// this edge is completely outside the bounds
+			if ((d_start_min.x > 0 && d_end_min.x > 0) ||
+				(d_start_max.x < 0 && d_end_max.x < 0) ||
+				(d_start_min.y > 0 && d_end_min.y > 0) ||
+				(d_start_max.y < 0 && d_end_max.y < 0)) {
+				delete_at(edges, i);
+				i--;
+				continue;
+			}
+
 			Point direction = edges[i].end - edges[i].start;
-			if (edges[i].start.x < bounds_min.x) {
-				float x1 = (bounds_min.x - edges[i].start.x) / direction.x;
-				edges[i].start.x = bounds_min.x;
-				edges[i].start.y += x1 * direction.y;
-			} else if (edges[i].start.x > bounds_max.x) {
-				float x1 = (bounds_max.x - edges[i].start.x) / direction.x;
+			float grad = direction.y / direction.x;
+
+			if (d_start_min.x > 0) {
+				edges[i].start.x += d_start_min.x;
+				edges[i].start.y += d_start_min.x * grad;
+			} else if (d_start_max.x < 0) {
 				edges[i].start.x = bounds_max.x;
-				edges[i].start.y += x1 * direction.y;
+				edges[i].start.y += d_start_max.x * grad;
 			}
 
-			if (edges[i].end.x < bounds_min.x) {
-				float x1 = (bounds_min.x - edges[i].end.x) / direction.x;
-				edges[i].end.x = bounds_min.x;
-				edges[i].end.y += x1 * direction.y;
-			} else if (edges[i].end.x > bounds_max.x) {
-				float x1 = (bounds_max.x - edges[i].end.x) / direction.x;
-				edges[i].end.x = bounds_max.x;
-				edges[i].end.y += x1 * direction.y;
+			if (d_end_min.x > 0) {
+				edges[i].end.x += d_end_min.x;
+				edges[i].end.y += d_end_min.x * grad;
+			} else if (d_end_max.x < 0) {
+				edges[i].end.x += d_end_max.x;
+				edges[i].end.y += d_end_max.x * grad;
 			}
 
-			// if (edges[i].start.y < bounds_min.y) {
-			// 	float y1 = (bounds_min.y - start.y) / direction.y;
-			// 	edges[i].start.y = bounds_min.x;
-			// 	edges[i].start.x += y1 * direction.x;
-			// } else if (edges[i].start.y > bounds_max.y) {
-			// 	float y1 = (bounds_max.y - start.y) / direction.y;
-			// 	edges[i].start.y = bounds_max.y;
-			// 	edges[i].start.x += y1 * direction.x;
-			// }
+			if (d_start_min.y > 0) {
+				edges[i].start.y += d_start_min.y;
+				edges[i].start.x += d_start_min.y / grad;
+			} else if (d_start_max.y < 0) {
+				edges[i].start.y += d_start_max.y;
+				edges[i].start.x += d_start_max.y / grad;
+			}
+
+			if (d_end_min.y > 0) {
+				edges[i].end.y += d_end_min.y;
+				edges[i].end.x += d_end_min.y / grad;
+			} else if (d_end_max.y < 0) {
+				edges[i].end.y += d_end_max.y;
+				edges[i].end.x += d_end_max.y / grad;
+			}
 		}
+	}
+
+	void solve_full() {
+		solve();
+
+		printf("solving with %li points\n", events.size());
+		while (!events.empty()) {
+			next_step();
+		}
+		printf("processed %i events\n", proceessed_events);
+
+		add_remaining_edges();
+		clip_edges();
 	}
 
 	void solve() {
@@ -387,9 +404,10 @@ class Voronoi {
 		float x_max = points[0].x;
 		float y_min = points[0].y;
 		float y_max = points[0].y;
+
 		// add all the sites as events that will take place
 		for (size_t i = 0; i < points.size(); i++) {
-			events.push(Event(EVENT_SITE, points[i], points[i].y, event_id++));
+			events.push(Event(EVENT_SITE, points[i], points[i].y));
 
 			if (points[i].y > y_max) y_max = points[i].y;
 			else if (points[i].y < y_min) y_min = points[i].y;
@@ -404,7 +422,7 @@ class Voronoi {
 		current_sweep = y_above;
 
 		// TODO: this is temporary
-		events.push(Event(EVENT_SITE, Point(x_midpoint, current_sweep), current_sweep, event_id++)); // this is to avoid the issues with the first generated sites
+		events.push(Event(EVENT_SITE, Point(x_midpoint, current_sweep), current_sweep)); // this is to avoid the issues with the first generated sites
 	}
 };
 
