@@ -41,7 +41,7 @@ int main(int argc, char *argv[]) {
 
 	auto start = std::chrono::high_resolution_clock().now();
 	voronoi::Voronoi voronoi = voronoi::Voronoi(points, point_count, min, max);
-	voronoi.solve_full();
+	voronoi.solve();
 
 	auto end = std::chrono::high_resolution_clock().now();
 

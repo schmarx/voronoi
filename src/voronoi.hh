@@ -6,11 +6,6 @@
 
 namespace voronoi {
 
-enum EVENT_TYPES {
-	EVENT_SITE,
-	EVENT_INTERSECT
-};
-
 enum COAST_TYPES {
 	COAST_ARC,
 	COAST_EDGE
@@ -68,24 +63,34 @@ class Edge {
 };
 
 class Coast;
+class Voronoi;
 
 class Event {
   public:
 	int id;
-	int type;
 	Point point;
 	float timestamp; // the sweepline point at which this event will happen ( largest happens earliest )
-	int event_target_id;
 
-	int invalid = 0;
+	Event(Point event_point, float sweepline);
+	virtual ~Event() = 0;
 
-	Event(int event_type, Point event_point, float sweepline);
-
-	// the event with largest timestamp occurs first
-	bool operator<(const Event &event) const;
+	bool operator<(const Event &event) const;								 // the event with largest timestamp occurs first
+	virtual void handle(Voronoi &solver, std::vector<Coast> &coastline) = 0; // handles the event
 };
 
-class Voronoi;
+class SiteEvent : public Event {
+  public:
+	SiteEvent(Point event_point, float sweepline);
+	void handle(Voronoi &solver, std::vector<Coast> &coastline);
+};
+
+class IntersectEvent : public Event {
+  public:
+	int event_target_id;
+
+	IntersectEvent(Point event_point, float sweepline, int target_id);
+	void handle(Voronoi &solver, std::vector<Coast> &coastline);
+};
 
 class Coast {
   public:
@@ -110,19 +115,13 @@ class Comparator {
 
 class Voronoi {
   private:
-	std::priority_queue<Event> events;
+	std::priority_queue<Event *, std::vector<Event *>, Comparator> events;
 	std::vector<Coast> coastline;
 
 	float current_sweep;
 	int event_count = 0;
 
 	Line bounds;
-
-	// get the coast arc above the given point
-	int get_coast_above(Point point);
-	void get_intersection_event(int index);
-	void do_site(Event event);
-	void do_intersect(Event event);
 
   public:
 	std::vector<Point> points;
@@ -133,11 +132,15 @@ class Voronoi {
 	Voronoi(float **pts, int point_count, Point min, Point max);
 	Voronoi();
 
-	void next_step();
+	int get_coast_above(Point point); // get the coast arc above the given point
+	void get_intersection_event(int index);
+
+	void init_events(); // initialise for handling events step-by-step
+	void next_step();	// handle next event
+	void solve();		// initialises and steps through all events
+
 	void add_remaining_edges();
 	void clip_edges();
-	void solve_full();
-	void solve();
 };
 
 }; // namespace voronoi

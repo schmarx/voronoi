@@ -36,18 +36,100 @@ Edge::Edge(Point start, Point end) : line(start, end) {}
 // ----- edge definitions end -----
 
 // ----- event definitions start -----
-Event::Event(int event_type, Point event_point, float sweepline) {
-	type = event_type;
+Event::Event(Point event_point, float sweepline) {
 	point = event_point;
 	timestamp = sweepline;
 
 	id = event_id++; // give this a unique identifier
 }
 
+Event::~Event() {}
+
 // the event with largest timestamp occurs first
 bool Event::operator<(const Event &event) const {
 	return timestamp < event.timestamp;
 }
+
+SiteEvent::SiteEvent(Point event_point, float sweepline) : Event(event_point, sweepline) {}
+
+IntersectEvent::IntersectEvent(Point event_point, float sweepline, int target_id) : Event(event_point, sweepline) {
+	event_target_id = target_id;
+}
+
+void SiteEvent::handle(Voronoi &solver, std::vector<Coast> &coastline) {
+	// create a new arc to add to the coastline
+	Coast new_arc = Coast(point, COAST_ARC);
+
+	int coast_above = solver.get_coast_above(point); // find the coast that is directly above this point
+	if (coast_above == -1) {
+		// this should only happen when the coast is empty (when this is the first event)
+		coastline.push_back(Coast(new_arc));
+	} else {
+		// the arc above will be split in two, where the feasible ranges will extend from the newly inserted point
+		Coast left_split = coastline[coast_above].copy();
+		Coast right_split = coastline[coast_above].copy();
+		left_split.range_x.end = point.x;
+		right_split.range_x.start = point.x;
+
+		// where the new arc intersects with the arc above
+		Point intersection_point = Point(point.x, parabola_y(point.x, coastline[coast_above].focus, timestamp));
+		Coast left = Coast(intersection_point, COAST_EDGE);
+		Coast right = Coast(intersection_point, COAST_EDGE);
+
+		Point dr = new_arc.focus - coastline[coast_above].focus;
+		left.direction = Point(dr.y, -dr.x);  // rotate by -pi/2
+		right.direction = Point(-dr.y, dr.x); // rotate by pi/2
+
+		delete_at(coastline, coast_above);
+
+		insert_at(coastline, coast_above, left_split);
+		insert_at(coastline, coast_above + 1, left);
+		insert_at(coastline, coast_above + 2, new_arc);
+		insert_at(coastline, coast_above + 3, right);
+		insert_at(coastline, coast_above + 4, right_split);
+
+		// printf("added %.1f, %.1f and %.1f, %.1f (%.1f, %.1f), (%.1f, %.1f)\n", left.direction.x, left.direction.y, right.direction.x, right.direction.y, new_arc.focus.x, new_arc.focus.y, coastline[coast_above].focus.x, coastline[coast_above].focus.y);
+		solver.get_intersection_event(coast_above);		// the left side
+		solver.get_intersection_event(coast_above + 4); // the right side
+	}
+}
+
+void IntersectEvent::handle(Voronoi &solver, std::vector<Coast> &coastline) {
+	int index = -1;
+	for (size_t i = 2; i < coastline.size() - 2; i++) {
+		if (coastline[i].id == event_target_id) {
+			index = i;
+			break;
+		}
+	}
+	if (index == -1) return;
+
+	Coast edge_left = Coast(coastline[index - 1]);
+	Coast edge_right = Coast(coastline[index + 1]);
+
+	delete_at(coastline, index + 1); // delete left edge
+	delete_at(coastline, index);	 // delete collapsed arc
+	delete_at(coastline, index - 1); // delete right edge
+
+	// these arcs now need an edge between them
+	Coast arc_left = coastline[index - 2];
+	Coast arc_right = coastline[index - 1];
+
+	Coast new_edge = Coast(point, COAST_EDGE);
+
+	Point dr = arc_right.focus - arc_left.focus;
+	new_edge.direction = Point(dr.y, -dr.x);
+
+	insert_at(coastline, index - 1, Coast(new_edge));
+
+	// these edges are apart of the voronoi diagram
+	solver.edges.push_back(Edge(point, edge_left.focus));
+	solver.edges.push_back(Edge(point, edge_right.focus));
+
+	solver.get_intersection_event(index);	  // the next arc
+	solver.get_intersection_event(index - 2); // the previous arc
+}
+
 // ----- event definitions end -----
 
 // ----- coast definitions start -----
@@ -114,84 +196,9 @@ void Voronoi::get_intersection_event(int index) {
 		return;
 	}
 
-	Event new_event = Event(EVENT_INTERSECT, intersection, sweepline);
-	new_event.event_target_id = arc.id;
+	IntersectEvent *new_event = new IntersectEvent(intersection, sweepline, arc.id);
 
 	events.push(new_event);
-}
-
-void Voronoi::do_site(Event event) {
-	// create a new arc to add to the coastline
-	Coast new_arc = Coast(event.point, COAST_ARC);
-
-	int coast_above = get_coast_above(event.point); // find the coast that is directly above this point
-	if (coast_above == -1) {
-		// this should only happen when the coast is empty (when this is the first event)
-		coastline.push_back(Coast(new_arc));
-	} else {
-		// the arc above will be split in two, where the feasible ranges will extend from the newly inserted point
-		Coast left_split = coastline[coast_above].copy();
-		Coast right_split = coastline[coast_above].copy();
-		left_split.range_x.end = event.point.x;
-		right_split.range_x.start = event.point.x;
-
-		// where the new arc intersects with the arc above
-		Point intersection_point = Point(event.point.x, parabola_y(event.point.x, coastline[coast_above].focus, event.timestamp));
-		Coast left = Coast(intersection_point, COAST_EDGE);
-		Coast right = Coast(intersection_point, COAST_EDGE);
-
-		Point dr = new_arc.focus - coastline[coast_above].focus;
-		left.direction = Point(dr.y, -dr.x);  // rotate by -pi/2
-		right.direction = Point(-dr.y, dr.x); // rotate by pi/2
-
-		delete_at(coastline, coast_above);
-
-		insert_at(coastline, coast_above, left_split);
-		insert_at(coastline, coast_above + 1, left);
-		insert_at(coastline, coast_above + 2, new_arc);
-		insert_at(coastline, coast_above + 3, right);
-		insert_at(coastline, coast_above + 4, right_split);
-
-		// printf("added %.1f, %.1f and %.1f, %.1f (%.1f, %.1f), (%.1f, %.1f)\n", left.direction.x, left.direction.y, right.direction.x, right.direction.y, new_arc.focus.x, new_arc.focus.y, coastline[coast_above].focus.x, coastline[coast_above].focus.y);
-		get_intersection_event(coast_above);	 // the left side
-		get_intersection_event(coast_above + 4); // the right side
-	}
-}
-
-void Voronoi::do_intersect(Event event) {
-	int index = -1;
-	for (size_t i = 2; i < coastline.size() - 2; i++) {
-		if (coastline[i].id == event.event_target_id) {
-			index = i;
-			break;
-		}
-	}
-	if (index == -1) return;
-
-	Coast edge_left = Coast(coastline[index - 1]);
-	Coast edge_right = Coast(coastline[index + 1]);
-
-	delete_at(coastline, index + 1); // delete left edge
-	delete_at(coastline, index);	 // delete collapsed arc
-	delete_at(coastline, index - 1); // delete right edge
-
-	// these arcs now need an edge between them
-	Coast arc_left = coastline[index - 2];
-	Coast arc_right = coastline[index - 1];
-
-	Coast new_edge = Coast(event.point, COAST_EDGE);
-
-	Point dr = arc_right.focus - arc_left.focus;
-	new_edge.direction = Point(dr.y, -dr.x);
-
-	insert_at(coastline, index - 1, Coast(new_edge));
-
-	// these edges are apart of the voronoi diagram
-	edges.push_back(Edge(event.point, edge_left.focus));
-	edges.push_back(Edge(event.point, edge_right.focus));
-
-	get_intersection_event(index);	   // the next arc
-	get_intersection_event(index - 2); // the previous arc
 }
 
 Voronoi::Voronoi(float **pts, int point_count, Point min, Point max) : bounds(min, max) {
@@ -204,17 +211,58 @@ Voronoi::Voronoi() : bounds(Point(0, 0), Point(0, 0)) {}
 
 void Voronoi::next_step() {
 	if (!events.empty()) {
+		Event *event = events.top(); // get next event from the priority queue
+		events.pop();				 // remove this event
 
-		Event next_event = events.top(); // get next event from the priority queue
-		events.pop();					 // remove this event
+		current_sweep = event->timestamp;
 
-		current_sweep = next_event.timestamp;
+		event->handle(*this, coastline);
 
-		if (next_event.type == EVENT_SITE) do_site(next_event);
-		else do_intersect(next_event);
-
+		delete event;
 		proceessed_events++;
 	}
+}
+void Voronoi::solve() {
+	init_events();
+
+	printf("solving with %li points\n", events.size());
+	while (!events.empty()) {
+		next_step();
+	}
+	printf("processed %i events\n", proceessed_events);
+
+	add_remaining_edges();
+	clip_edges();
+}
+
+void Voronoi::init_events() {
+	if (points.size() < 1) return;
+
+	current_sweep = points[0].y;
+
+	float x_min = points[0].x;
+	float x_max = points[0].x;
+	float y_min = points[0].y;
+	float y_max = points[0].y;
+
+	// add all the sites as events that will take place
+	for (size_t i = 0; i < points.size(); i++) {
+		events.push(new SiteEvent(points[i], points[i].y));
+
+		if (points[i].y > y_max) y_max = points[i].y;
+		else if (points[i].y < y_min) y_min = points[i].y;
+
+		if (points[i].x > x_max) x_max = points[i].x;
+		else if (points[i].x < x_min) x_min = points[i].x;
+	}
+
+	float x_midpoint = (x_max + x_min) / 2;
+	float y_above = y_max + (y_max - y_min) / 2; // a height significantly higher than the highest point
+
+	current_sweep = y_above;
+
+	// TODO: this is temporary to avoid the issues with the first generated sites
+	events.push(new SiteEvent(Point(x_midpoint, current_sweep), current_sweep));
 }
 
 void Voronoi::add_remaining_edges() {
@@ -316,49 +364,6 @@ void Voronoi::clip_edges() {
 			edges[i].line.end.x += d_end_max.y / grad;
 		}
 	}
-}
-
-void Voronoi::solve_full() {
-	solve();
-
-	printf("solving with %li points\n", events.size());
-	while (!events.empty()) {
-		next_step();
-	}
-	printf("processed %i events\n", proceessed_events);
-
-	add_remaining_edges();
-	clip_edges();
-}
-
-void Voronoi::solve() {
-	if (points.size() < 1) return;
-
-	current_sweep = points[0].y;
-
-	float x_min = points[0].x;
-	float x_max = points[0].x;
-	float y_min = points[0].y;
-	float y_max = points[0].y;
-
-	// add all the sites as events that will take place
-	for (size_t i = 0; i < points.size(); i++) {
-		events.push(Event(EVENT_SITE, points[i], points[i].y));
-
-		if (points[i].y > y_max) y_max = points[i].y;
-		else if (points[i].y < y_min) y_min = points[i].y;
-
-		if (points[i].x > x_max) x_max = points[i].x;
-		else if (points[i].x < x_min) x_min = points[i].x;
-	}
-
-	float x_midpoint = (x_max + x_min) / 2;
-	float y_above = y_max + (y_max - y_min) / 2; // a height significantly higher than the highest point
-
-	current_sweep = y_above;
-
-	// TODO: this is temporary
-	events.push(Event(EVENT_SITE, Point(x_midpoint, current_sweep), current_sweep)); // this is to avoid the issues with the first generated sites
 }
 
 }; // namespace voronoi
