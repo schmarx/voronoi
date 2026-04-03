@@ -32,10 +32,7 @@ float Point::norm() { return sqrt(norm2()); }
 // ----- point definitions end -----
 
 // ----- edge definitions start -----
-Edge::Edge(Point start, Point end) {
-	this->start = start;
-	this->end = end;
-}
+Edge::Edge(Point start, Point end) : line(start, end) {}
 // ----- edge definitions end -----
 
 // ----- event definitions start -----
@@ -54,10 +51,8 @@ bool Event::operator<(const Event &event) const {
 // ----- event definitions end -----
 
 // ----- coast definitions start -----
-Coast::Coast(Point start, int coast_type) {
+Coast::Coast(Point start, int coast_type) : range_x(__FLT_MIN__, __FLT_MAX__) {
 	focus = start;
-	range_start = __FLT_MIN__;
-	range_end = __FLT_MAX__;
 	type = coast_type;
 
 	id = coast_id++;
@@ -77,7 +72,7 @@ int Voronoi::get_coast_above(Point point) {
 	int min_index = -1;
 	for (size_t i = 0; i < coastline.size(); i++) {
 		if (coastline[i].type == COAST_EDGE) continue;
-		if (coastline[i].range_start < point.x && coastline[i].range_end > point.x) {
+		if (coastline[i].range_x.contains(point.x)) {
 			if (min_index == -1) min_index = i;
 			else if (parabola_y(point.x, coastline[i].focus, point.y) < parabola_y(point.x, coastline[min_index].focus, point.y)) min_index = i;
 		}
@@ -137,8 +132,8 @@ void Voronoi::do_site(Event event) {
 		// the arc above will be split in two, where the feasible ranges will extend from the newly inserted point
 		Coast left_split = coastline[coast_above].copy();
 		Coast right_split = coastline[coast_above].copy();
-		left_split.range_end = event.point.x;
-		right_split.range_start = event.point.x;
+		left_split.range_x.end = event.point.x;
+		right_split.range_x.start = event.point.x;
 
 		// where the new arc intersects with the arc above
 		Point intersection_point = Point(event.point.x, parabola_y(event.point.x, coastline[coast_above].focus, event.timestamp));
@@ -199,17 +194,13 @@ void Voronoi::do_intersect(Event event) {
 	get_intersection_event(index - 2); // the previous arc
 }
 
-Voronoi::Voronoi(float **pts, int point_count, float x_min, float x_max, float y_min, float y_max) {
+Voronoi::Voronoi(float **pts, int point_count, Point min, Point max) : bounds(min, max) {
 	for (int i = 0; i < point_count; i++) {
 		points.push_back(Point(pts[i][0], pts[i][1]));
 	}
-
-	bounds_min = Point(x_min, y_min);
-	bounds_max = Point(x_max, y_max);
 }
 
-Voronoi::Voronoi() {
-}
+Voronoi::Voronoi() : bounds(Point(0, 0), Point(0, 0)) {}
 
 void Voronoi::next_step() {
 	if (!events.empty()) {
@@ -234,11 +225,11 @@ void Voronoi::add_remaining_edges() {
 			float direction_x = coastline[i].direction.x;
 			float direction_y = coastline[i].direction.y;
 
-			float x1 = (bounds_min.x - start_x) / direction_x;
-			float x2 = (bounds_max.x - start_x) / direction_x;
+			float x1 = (bounds.start.x - start_x) / direction_x;
+			float x2 = (bounds.end.x - start_x) / direction_x;
 
-			float y1 = (bounds_min.y - start_y) / direction_y;
-			float y2 = (bounds_max.y - start_y) / direction_y;
+			float y1 = (bounds.start.y - start_y) / direction_y;
+			float y2 = (bounds.end.y - start_y) / direction_y;
 
 			if ((x1 < 0 && x2 < 0) || (y1 < 0 && y2 < 0)) continue;
 
@@ -257,15 +248,15 @@ void Voronoi::add_remaining_edges() {
 
 			if (x_used < y_used) {
 				if (use_min_x) {
-					edges.push_back(Edge(coastline[i].focus, Point(bounds_min.x, start_y + direction_y * x_used)));
+					edges.push_back(Edge(coastline[i].focus, Point(bounds.start.x, start_y + direction_y * x_used)));
 				} else {
-					edges.push_back(Edge(coastline[i].focus, Point(bounds_max.x, start_y + direction_y * x_used)));
+					edges.push_back(Edge(coastline[i].focus, Point(bounds.end.x, start_y + direction_y * x_used)));
 				}
 			} else {
 				if (use_min_y) {
-					edges.push_back(Edge(coastline[i].focus, Point(start_x + direction_x * y_used, bounds_min.y)));
+					edges.push_back(Edge(coastline[i].focus, Point(start_x + direction_x * y_used, bounds.start.y)));
 				} else {
-					edges.push_back(Edge(coastline[i].focus, Point(start_x + direction_x * y_used, bounds_max.y)));
+					edges.push_back(Edge(coastline[i].focus, Point(start_x + direction_x * y_used, bounds.end.y)));
 				}
 			}
 		}
@@ -275,10 +266,10 @@ void Voronoi::add_remaining_edges() {
 void Voronoi::clip_edges() {
 	for (size_t i = 0; i < edges.size(); i++) {
 
-		Point d_start_min = bounds_min - edges[i].start;
-		Point d_start_max = bounds_max - edges[i].start;
-		Point d_end_min = bounds_min - edges[i].end;
-		Point d_end_max = bounds_max - edges[i].end;
+		Point d_start_min = bounds.start - edges[i].line.start;
+		Point d_start_max = bounds.end - edges[i].line.start;
+		Point d_end_min = bounds.start - edges[i].line.end;
+		Point d_end_max = bounds.end - edges[i].line.end;
 
 		// this edge is completely outside the bounds
 		if ((d_start_min.x > 0 && d_end_min.x > 0) ||
@@ -290,39 +281,39 @@ void Voronoi::clip_edges() {
 			continue;
 		}
 
-		Point direction = edges[i].end - edges[i].start;
+		Point direction = edges[i].line.end - edges[i].line.start;
 		float grad = direction.y / direction.x;
 
 		if (d_start_min.x > 0) {
-			edges[i].start.x += d_start_min.x;
-			edges[i].start.y += d_start_min.x * grad;
+			edges[i].line.start.x += d_start_min.x;
+			edges[i].line.start.y += d_start_min.x * grad;
 		} else if (d_start_max.x < 0) {
-			edges[i].start.x = bounds_max.x;
-			edges[i].start.y += d_start_max.x * grad;
+			edges[i].line.start.x = bounds.end.x;
+			edges[i].line.start.y += d_start_max.x * grad;
 		}
 
 		if (d_end_min.x > 0) {
-			edges[i].end.x += d_end_min.x;
-			edges[i].end.y += d_end_min.x * grad;
+			edges[i].line.end.x += d_end_min.x;
+			edges[i].line.end.y += d_end_min.x * grad;
 		} else if (d_end_max.x < 0) {
-			edges[i].end.x += d_end_max.x;
-			edges[i].end.y += d_end_max.x * grad;
+			edges[i].line.end.x += d_end_max.x;
+			edges[i].line.end.y += d_end_max.x * grad;
 		}
 
 		if (d_start_min.y > 0) {
-			edges[i].start.y += d_start_min.y;
-			edges[i].start.x += d_start_min.y / grad;
+			edges[i].line.start.y += d_start_min.y;
+			edges[i].line.start.x += d_start_min.y / grad;
 		} else if (d_start_max.y < 0) {
-			edges[i].start.y += d_start_max.y;
-			edges[i].start.x += d_start_max.y / grad;
+			edges[i].line.start.y += d_start_max.y;
+			edges[i].line.start.x += d_start_max.y / grad;
 		}
 
 		if (d_end_min.y > 0) {
-			edges[i].end.y += d_end_min.y;
-			edges[i].end.x += d_end_min.y / grad;
+			edges[i].line.end.y += d_end_min.y;
+			edges[i].line.end.x += d_end_min.y / grad;
 		} else if (d_end_max.y < 0) {
-			edges[i].end.y += d_end_max.y;
-			edges[i].end.x += d_end_max.y / grad;
+			edges[i].line.end.y += d_end_max.y;
+			edges[i].line.end.x += d_end_max.y / grad;
 		}
 	}
 }

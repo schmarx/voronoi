@@ -17,7 +17,7 @@ void output_edges(const std::vector<voronoi::Point> &points, const std::vector<v
 
 	for (size_t i = 0; i < edges.size(); i++) {
 		fprintf(file, "\n");
-		fprintf(file, "(%.1f, %.1f)\t(%.1f, %.1f)", edges[i].start.x, edges[i].start.y, edges[i].end.x, edges[i].end.y);
+		fprintf(file, "(%.1f, %.1f)\t(%.1f, %.1f)", edges[i].line.start.x, edges[i].line.start.y, edges[i].line.end.x, edges[i].line.end.y);
 	}
 
 	fclose(file);
@@ -28,21 +28,19 @@ int main(int argc, char *argv[]) {
 
 	int point_count = 20000;
 
-	float x_min = 0;
-	float x_max = 100;
-	float y_min = 0;
-	float y_max = 100;
+	voronoi::Point min = voronoi::Point(0, 0);
+	voronoi::Point max = voronoi::Point(100, 100);
 
 	float **points = (float **)calloc(point_count, sizeof(float *));
 	for (int i = 0; i < point_count; i++) {
 		points[i] = (float *)calloc(2, sizeof(float));
 
-		points[i][0] = rngfr(y_min, x_max);
-		points[i][1] = rngfr(y_min, y_max);
+		points[i][0] = rngfr(min.y, max.x);
+		points[i][1] = rngfr(min.y, max.y);
 	}
 
 	auto start = std::chrono::high_resolution_clock().now();
-	voronoi::Voronoi voronoi = voronoi::Voronoi(points, point_count, x_min, x_max, y_min, y_max);
+	voronoi::Voronoi voronoi = voronoi::Voronoi(points, point_count, min, max);
 	voronoi.solve_full();
 
 	auto end = std::chrono::high_resolution_clock().now();

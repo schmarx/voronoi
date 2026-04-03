@@ -31,13 +31,38 @@ class Point {
 	float norm();
 };
 
+class Line {
+  public:
+	Point start;
+	Point end;
+
+	Line(Point start, Point end) {
+		this->start = start;
+		this->end = end;
+	}
+};
+
+class Range {
+  public:
+	float start;
+	float end;
+
+	Range(float start, float end) {
+		this->start = start;
+		this->end = end;
+	}
+
+	bool contains(float value) {
+		return start < value && end > value;
+	}
+};
+
 // evaluates the height at position x of a parabola with given focus and directrix
 float parabola_y(float x, Point focus, float directrix);
 
 class Edge {
   public:
-	Point start;
-	Point end;
+	Line line;
 
 	Edge(Point start, Point end);
 };
@@ -69,12 +94,8 @@ class Coast {
 	Point focus;
 	int type;
 
-	// this tracks the feasible range of an arc
-	float range_start;
-	float range_end;
-
-	//  this tracks the direction of an edge
-	Point direction;
+	Range range_x;	 // this tracks the feasible range of an arc
+	Point direction; //  this tracks the direction of an edge
 
 	Coast(Point start, int coast_type);
 	Coast copy();
@@ -95,8 +116,7 @@ class Voronoi {
 	float current_sweep;
 	int event_count = 0;
 
-	Point bounds_min;
-	Point bounds_max;
+	Line bounds;
 
 	// get the coast arc above the given point
 	int get_coast_above(Point point);
@@ -110,7 +130,7 @@ class Voronoi {
 
 	int proceessed_events = 0;
 
-	Voronoi(float **pts, int point_count, float x_min, float x_max, float y_min, float y_max);
+	Voronoi(float **pts, int point_count, Point min, Point max);
 	Voronoi();
 
 	void next_step();
